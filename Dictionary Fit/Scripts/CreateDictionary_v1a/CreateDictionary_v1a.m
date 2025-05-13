@@ -40,7 +40,10 @@ if isfield(SCRPTGBL,('CreateDictionaryfunc_Data'))
 end
 func = str2func(DATA.bldfunc); 
 DictObj = func();
-DictObj.InitViaCompass(BLDipt);
+err = DictObj.InitViaCompass(BLDipt);
+if err.flag
+    return
+end
 
 %----------------------------------------------
 % Run
