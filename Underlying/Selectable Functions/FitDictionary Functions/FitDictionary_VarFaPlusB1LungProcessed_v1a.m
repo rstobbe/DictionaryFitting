@@ -1,0 +1,166 @@
+%==================================================================
+% (V1a)
+%   
+%==================================================================
+
+classdef FitDictionary_VarFaPlusB1LungProcessed_v1a < handle
+
+properties (SetAccess = private)                   
+    DictObj
+    B1Map
+end
+
+methods 
+   
+%==================================================================
+% Constructor
+%==================================================================  
+function obj = FitDictionary_VarFaPlusB1LungProcessed_v1a()              
+end
+
+%==================================================================
+% BuildTruth
+%==================================================================  
+function [IMG,err] = FitDictionary(obj,IMG0)     
+    err.flag = 0;  
+    
+    Data = IMG0{1}.Data;
+    MaskedLung = Data.CroppedImg .* Data.lung_mask;
+    sz = size(MaskedLung);
+    ImNum = sz(4);
+    SmoothedMaskedLung = zeros(sz);
+    %
+    MaskedLung(MaskedLung == 0) = NaN;
+    %
+    for n = 1:sz(4)
+        SmoothedMaskedLung(:,:,:,n) = smooth3(MaskedLung(:,:,:,n),'gaussian',5,2.5);
+    end
+    ImArray = SmoothedMaskedLung;
+
+    %----
+    % Test = flip(permute(obj.B1Map.Im,[3 2 1 4 5 6]),1);
+    obj.B1Map.Im = flip(permute(obj.B1Map.Im,[3 2 1 4 5 6]),1);
+    obj.B1Map.Im = obj.B1Map.Im(Data.ind2,Data.ind1,Data.ind_sag1);
+    ImSize = size(ImArray);
+    %----
+
+    ImArray(ImArray < 0.001) = NaN;
+
+    ImArrayMean = mean(ImArray,4);
+    ImArrayNorm = ImArray./repmat(ImArrayMean,1,1,1,ImNum) + obj.DictObj.RelB1AddScale*repmat(obj.B1Map.Im,1,1,1,ImNum);
+    ImArrayNorm = gpuArray(ImArrayNorm);
+    % ImArrayNorm = reshape(ImArrayNorm,ImSize(1)^3,ImNum);
+    ImArrayNorm = reshape(ImArrayNorm,ImSize(1)*ImSize(2)*ImSize(3),ImNum);
+
+    DictArray = gpuArray(obj.DictObj.DictArray);
+    % [ind,Dist] = knnsearch(DictArrayNorm,ImArrayNorm,'Distance','euclidean','K',1,'NSMethod','Exhaustive');
+    [ind,Dist] = knnsearch(DictArray,ImArrayNorm);
+
+    T1Map = obj.DictObj.T1Array(ind);
+    T1Map = reshape(T1Map,ImSize(1:3));
+
+    T1Map(T1Map < 201) = NaN;
+
+    % RelB1Map = obj.DictObj.RelB1Array(ind);
+    % RelB1Map = reshape(RelB1Map,ImSize(1:3));
+
+    Dist = reshape(Dist,ImSize(1:3));
+
+    Panel(1,:) = {'','','Output'};
+    Panel(2,:) = {'Method',class(obj),'Output'};
+    % obj.Panel(3,:) = {'TR',obj.TR,'Output'};
+    % obj.Panel(4,:) = {'FlipArray',obj.FlipArray,'Output'};
+    PanelOutput = cell2struct(Panel,{'label','value','type'},2);
+    %obj.PanelOutput = 
+
+    DispType = 'map';
+    DispWid = [min(T1Map(:)) max(T1Map(:))];
+    PixDim = IMG0{1}.IMDISP.ImInfo.pixdim;
+    Vox = IMG0{1}.IMDISP.ImInfo.vox;
+    IMG =  AddCompassGenericInfo(T1Map,'T1Map',obj,PanelOutput,DispType,DispWid,PixDim,Vox);     
+end
+
+%=================================================================
+% InitViaCompass
+%==================================================================  
+function InitViaCompass(obj,CompassInput)    
+    CallingLabel = CompassInput.Struct.labelstr;
+    DictionaryPresent = 0;
+    B1MapPresent = 0;
+    if isfield(CompassInput,[CallingLabel,'_Data'])
+        if isfield(CompassInput.([CallingLabel,'_Data']),'Dictionary_File_Data')
+            DictionaryPresent = 1;
+        end
+        if isfield(CompassInput.([CallingLabel,'_Data']),'B1Map_File_Data')
+            B1MapPresent = 1;
+        end
+    end
+    if DictionaryPresent == 0
+        if isfield(CompassInput.('Dictionary_File').Struct,'selectedfile')
+            file = CompassInput.('Dictionary_File').Struct.selectedfile;
+            if not(exist(file,'file'))
+                err.flag = 1;
+                err.msg = '(Re) Load Dictionary_File';
+                ErrDisp(err);
+                return
+            else
+                load(file);
+                CompassInput.([CallingLabel,'_Data']).('Dictionary_File_Data') = saveData;
+            end
+        else
+            err.flag = 1;
+            err.msg = '(Re) Load Dictionary_File';
+            ErrDisp(err);
+            return
+        end
+    end
+    obj.DictObj = CompassInput.([CallingLabel,'_Data']).('Dictionary_File_Data').DATA.DictObj;
+    if B1MapPresent == 0
+        if isfield(CompassInput.('B1Map_File').Struct,'selectedfile')
+            file = CompassInput.('B1Map_File').Struct.selectedfile;
+            if not(exist(file,'file'))
+                err.flag = 1;
+                err.msg = '(Re) Load B1Map_File';
+                ErrDisp(err);
+                return
+            else
+                load(file);
+                CompassInput.([CallingLabel,'_Data']).('B1Map_File_Data') = saveData;
+            end
+        else
+            err.flag = 1;
+            err.msg = '(Re) Load B1Map_File';
+            ErrDisp(err);
+            return
+        end
+    end
+    obj.B1Map = CompassInput.([CallingLabel,'_Data']).('B1Map_File_Data').IMG;
+end
+
+%==================================================================
+% CompassInterface
+%==================================================================  
+function [Interface] = CompassInterface(obj,SCRPTPATHS)    
+    global COMPASSINFO
+    m = 1;
+    Interface{m, 1}.entrytype = 'RunExtFunc';
+    Interface{m,1}.labelstr = 'Dictionary_File';
+    Interface{m,1}.entrystr = '';
+    Interface{m,1}.buttonname = 'Load';
+    Interface{m,1}.runfunc1 = 'LoadScriptFileCur';
+    Interface{m,1}.(Interface{m,1}.runfunc1).curloc = SCRPTPATHS.outloc;
+    Interface{m,1}.runfunc2 = 'LoadScriptFileDef';
+    Interface{m,1}.(Interface{m,1}.runfunc2).defloc = COMPASSINFO.USERGBL.trajreconloc;
+    m = m+1;
+    Interface{m,1}.entrytype = 'RunExtFunc';
+    Interface{m,1}.labelstr = 'B1Map_File';
+    Interface{m,1}.entrystr = '';
+    Interface{m,1}.buttonname = 'Load';
+    Interface{m,1}.runfunc1 = 'LoadImageCur';
+    Interface{m,1}.(Interface{m,1}.runfunc1).curloc = SCRPTPATHS.outloc;
+    Interface{m,1}.runfunc2 = 'LoadImageDef';
+    Interface{m,1}.(Interface{m,1}.runfunc2).defloc = COMPASSINFO.USERGBL.trajreconloc;
+end 
+
+end
+end
